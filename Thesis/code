@@ -1,1 +1,235 @@
-wd
+import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import tkinter as tk
+from tkinter import ttk
+
+# Directory containing qqq ETF file
+qqq_directory = r'C:\Users\Kamatsos\Desktop\FolderThesis\ETFs'
+
+# Stock directory containing other stocks
+stock_directory = r'C:\Users\Kamatsos\Desktop\FolderThesis\Stocks'
+
+one_month_window = 21
+two_month_window = 42
+three_month_window = 63
+
+# Predefined list of NASDAQ ETF stock symbols
+nasdaq_etf_symbols = [
+    'AAPL', 'MSFT', 'AMZN', 'FB', 'GOOGL', 'TSLA', 'NVDA', 'PYPL', 'ADBE', 'NFLX',
+    'INTC', 'CSCO', 'PEP', 'AVGO', 'COST', 'QCOM', 'TXN', 'TMUS', 'AMD', 'ISRG'
+]
+
+# Function to load the qqq ETF file for training
+def load_qqq_etf_data():
+    qqq_file_path = os.path.join(qqq_directory, 'qqq.us.txt')
+    return pd.read_csv(qqq_file_path)
+
+# Function to load the selected stock file into a dataframe
+def load_stock_data(directory, stock_file):
+    file_path = os.path.join(directory, stock_file)
+    return pd.read_csv(file_path)
+
+# Function to list stock files and filter for NASDAQ ETF stocks
+def list_stock_files(directory, nasdaq_symbols):
+    stock_files = [f for f in os.listdir(directory) if f.endswith('.us.txt')]
+    stock_symbols = [f.split('.')[0].upper() for f in stock_files]  # Extract stock symbol from file name
+    filtered_files = [(f, s) for f, s in zip(stock_files, stock_symbols) if s in nasdaq_symbols]  # Filter by NASDAQ symbols
+    return [f[0] for f in filtered_files], [f[1] for f in filtered_files]
+
+# RSI computation function
+def compute_rsi(series, period=14):
+    delta = series.diff()  
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean() 
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()  
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))  
+    return rsi
+
+# Preprocessing function for stock data
+def preprocess(dataframe, stock_name):
+    dataframe["stock_name"] = stock_name  # Add stock name to the dataframe
+    dataframe["AVG"] = (dataframe['High'] + dataframe['Low']) / 2
+    dataframe["Date"] = pd.to_datetime(dataframe["Date"])
+    dataframe["Year"] = dataframe["Date"].apply(lambda x: x.year)
+    dataframe["Month"] = dataframe["Date"].apply(lambda x: x.month)
+    dataframe.drop("OpenInt", axis=1, inplace=True)
+    dataframe["ema_onemonth"] = dataframe["AVG"].ewm(span=21, adjust=False).mean()
+    dataframe["rsi_onemonth"] = compute_rsi(dataframe["AVG"])
+    dataframe['1_Month_Rolling'] = dataframe['AVG'].rolling(window=one_month_window).mean()
+    dataframe['2_Month_Rolling'] = dataframe['AVG'].rolling(window=two_month_window).mean()
+    dataframe['3_Month_Rolling'] = dataframe['AVG'].rolling(window=three_month_window).mean()
+    dataframe['1_Month_Rolling'].fillna(dataframe['AVG'], inplace=True)
+    dataframe['2_Month_Rolling'].fillna(dataframe['AVG'], inplace=True)
+    dataframe['3_Month_Rolling'].fillna(dataframe['AVG'], inplace=True)
+    dataframe['Volatility'] = dataframe['Close'].rolling(window=30).std()
+    dataframe['Future_Close'] = dataframe['Close'].shift(-30)
+    dataframe.dropna(subset=['Future_Close'], inplace=True)
+    dataframe['Volatility'] = dataframe['Volatility'].fillna(dataframe['Volatility'].mean())
+    dataframe['rsi_onemonth'] = dataframe['rsi_onemonth'].fillna(dataframe['rsi_onemonth'].mean())
+    return dataframe
+
+# Function to train models on QQQ ETF data and return trained models
+def train_models_on_qqq():
+    # Load QQQ ETF data
+    qqq_data = load_qqq_etf_data()
+    qqq_data = preprocess(qqq_data, "qqq")
+    
+    # Prepare features and target variable
+    X = qqq_data.drop(["Future_Close", "Close", "Date", "stock_name"], axis=1)
+    Y = qqq_data["Future_Close"]
+
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    # Train the models using QQQ data
+    RandomForest = RandomForestRegressor(n_estimators=100, random_state=42)
+    RandomForest.fit(X_scaled, Y)
+
+    Support = SVR()
+    Support.fit(X_scaled, Y)
+
+    Linear = LinearRegression()
+    Linear.fit(X_scaled, Y)
+
+    return (RandomForest, Support, Linear), scaler  # Return models as a tuple with the scaler
+
+# Function to make predictions on the selected stock using trained models
+def predict_on_selected_stock(models, scaler, selected_stock_symbol, selected_stock_file):
+    RandomForest, Support, Linear = models
+
+    # Load the selected stock data
+    stock_data = load_stock_data(stock_directory, selected_stock_file)
+    
+    # Preprocess the stock data
+    stock_data = preprocess(stock_data, selected_stock_symbol)
+
+    X = stock_data.drop(["Close", "Future_Close", "Date", "stock_name"], axis=1)
+
+    # Scale the input data
+    X_scaled = scaler.transform(X)
+
+    # Predict using the trained models
+    y_pred_rf = RandomForest.predict(X_scaled)
+    y_pred_svr = Support.predict(X_scaled)
+    y_pred_linear = Linear.predict(X_scaled)
+
+    # Calculate performance metrics
+    mae_rf = mean_absolute_error(stock_data['Future_Close'], y_pred_rf)
+    mse_rf = mean_squared_error(stock_data['Future_Close'], y_pred_rf)
+
+    mae_svr = mean_absolute_error(stock_data['Future_Close'], y_pred_svr)
+    mse_svr = mean_squared_error(stock_data['Future_Close'], y_pred_svr)
+
+    mae_linear = mean_absolute_error(stock_data['Future_Close'], y_pred_linear)
+    mse_linear = mean_squared_error(stock_data['Future_Close'], y_pred_linear)
+
+    return stock_data["Date"], stock_data["Close"], y_pred_rf, y_pred_svr, y_pred_linear, mae_rf, mse_rf, mae_svr, mse_svr, mae_linear, mse_linear
+
+# Plotting predictions vs actual prices
+def plot_predictions(dates, actual, predictions, model_name, stock_name, shift_days=30):
+    # Convert predictions (numpy array) to pandas Series with the same index as the dates
+    predictions_series = pd.Series(predictions, index=dates.index)
+    
+    # Shift predictions by 30 days
+    shifted_predictions = shift_predictions(predictions_series, shift_days)
+    
+    # Also set last 30 days of the actual prices to NaN for plotting
+    actual_shifted = actual.copy()
+    actual_shifted.iloc[-shift_days:] = np.nan
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(dates, actual_shifted, label="Actual Prices", color='b')
+    plt.plot(dates, shifted_predictions, label=f"Predicted Prices ({model_name})", color='r', linestyle='--')
+    plt.title(f"{stock_name} Stock Price Prediction ({model_name}) vs Actual Prices")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+# Function to shift predictions by 30 days and generate NaNs for plotting
+def shift_predictions(predictions, shift_days=30):
+    shifted_preds = pd.Series(np.nan, index=predictions.index)
+    shifted_preds.iloc[shift_days:] = predictions[:-shift_days].values
+    return shifted_preds
+
+# Function to run analysis for the selected stock
+def run_analysis(models, scaler, selected_stock_symbol, selected_stock_file, mae_mse_labels):
+    dates, actual, y_pred_rf, y_pred_svr, y_pred_linear, mae_rf, mse_rf, mae_svr, mse_svr, mae_linear, mse_linear = predict_on_selected_stock(
+        models, scaler, selected_stock_symbol, selected_stock_file
+    )
+
+    # Update the UI with MAE and MSE for each model
+    mae_mse_labels['rf'].config(text=f"RandomForest MAE: {mae_rf:.4f}, MSE: {mse_rf:.4f}")
+    mae_mse_labels['svr'].config(text=f"SVR MAE: {mae_svr:.4f}, MSE: {mse_svr:.4f}")
+    mae_mse_labels['linear'].config(text=f"LinearRegression MAE: {mae_linear:.4f}, MSE: {mse_linear:.4f}")
+
+    # Plot predictions for each model
+    plot_predictions(dates, actual, y_pred_rf, "RandomForest", selected_stock_symbol)
+    plot_predictions(dates, actual, y_pred_svr, "SVR", selected_stock_symbol)
+    plot_predictions(dates, actual, y_pred_linear, "Linear Regression", selected_stock_symbol)
+
+# Create the tkinter UI for stock selection
+def create_ui():
+    # Create the main window
+    root = tk.Tk()
+    root.title("NASDAQ ETF Stock Selector")
+    root.geometry("500x450")  # Set window size
+
+    # Style customization
+    style = ttk.Style()
+    style.configure('TButton', font=('Helvetica', 12), padding=10)
+    style.configure('TLabel', font=('Helvetica', 14), padding=10)
+    style.configure('TCombobox', font=('Helvetica', 12), padding=5)
+
+    # Create a frame to hold content, center-align elements
+    frame = ttk.Frame(root, padding=20)
+    frame.pack(expand=True)
+
+    # Create a dropdown menu for stock selection
+    label = ttk.Label(frame, text="Select a NASDAQ ETF stock:")
+    label.pack(pady=10)
+
+    stock_files, stock_symbols = list_stock_files(stock_directory, nasdaq_etf_symbols)
+    
+    # Create a Combobox (dropdown)
+    combo = ttk.Combobox(frame, values=stock_symbols, state='readonly')
+    combo.pack(pady=10)
+
+    # Labels for MAE and MSE display
+    mae_mse_labels = {
+        "rf": ttk.Label(frame, text="RandomForest MAE: --, MSE: --"),
+        "svr": ttk.Label(frame, text="SVR MAE: --, MSE: --"),
+        "linear": ttk.Label(frame, text="LinearRegression MAE: --, MSE: --"),
+    }
+    mae_mse_labels["rf"].pack(pady=5)
+    mae_mse_labels["svr"].pack(pady=5)
+    mae_mse_labels["linear"].pack(pady=5)
+
+    # Function to run the analysis based on user selection
+    def on_select():
+        selected_stock_symbol = combo.get()
+        if selected_stock_symbol in stock_symbols:
+            selected_stock_file = stock_files[stock_symbols.index(selected_stock_symbol)]
+            run_analysis(models, scaler, selected_stock_symbol, selected_stock_file, mae_mse_labels)
+        else:
+            print("Invalid selection. Please select a valid stock.")
+
+    # Create a button to start the analysis
+    button = ttk.Button(frame, text="Run Analysis", command=on_select)
+    button.pack(pady=10)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    # Train models on QQQ ETF data once at the start
+    models, scaler = train_models_on_qqq()  # Models and scaler are returned correctly
+    # Create the UI
+    create_ui()
