@@ -1,0 +1,15 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+
+# Ignore thesis datasets (anywhere)
+**/Data/
+**/ETFs/
+**/Stocks/
+
+# (optional) ignore common data formats inside them too
+**/Data/**
+**/ETFs/**
+**/Stocks/**
+**/ILIADA GAME/**
